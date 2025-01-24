@@ -1,4 +1,6 @@
-﻿namespace ConsoleApp_Lab1_release.Models
+﻿using System.Diagnostics;
+
+namespace ConsoleApp_Lab1_release.Models
 {
     /// <summary>
     /// Поток(Деталь)
@@ -55,6 +57,10 @@
         /// </summary>
         public List<(DateTime Timestamp, string EventName)> EventHistory { get; } = new List<(DateTime, string)>();
 
+        public Action ExecuteAction { get; }
+        public CancellationTokenSource Cts { get; } = new();
+
+
         /// <summary>
         /// Конструктор потока
         /// </summary>
@@ -63,7 +69,9 @@
         /// <param name="cpuBurst">Время выполнения</param>
         /// <param name="count">Кол-во</param>
         /// <param name="requiredResources">Список требуемых ресурсов</param>
-        public Process(int id, string name, int priority, int cpuBurst, int count, List<int> requiredResources)
+        public Process(int id, string name, 
+            int priority, int cpuBurst, 
+            int count, List<int> requiredResources, Action execute)
         {
             Id = id;
             Name = name;
@@ -72,6 +80,20 @@
             Count = count;
             RequiredResources = requiredResources;
             RemainingTime = cpuBurst;
+            ExecuteAction = execute;
+        }
+
+        public async Task ExecuteAsync()
+        {
+            var sw = Stopwatch.StartNew();
+            await Task.Run(() =>
+            {
+                ExecuteAction();
+                while (sw.ElapsedMilliseconds < CpuBurst)
+                {
+                    if (Cts.Token.IsCancellationRequested) break;
+                }
+            }, Cts.Token);
         }
     }
 

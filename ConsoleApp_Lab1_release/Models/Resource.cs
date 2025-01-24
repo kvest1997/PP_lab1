@@ -25,7 +25,10 @@
         /// </summary>
         public int AvailableSlots { get; set; }
 
-        public object Lock = new object();
+        /// <summary>
+        /// Объект для блокировки
+        /// </summary>
+        public object LockObject = new object();
 
         /// <summary>
         /// Конструктор ресурса

@@ -1,5 +1,6 @@
 ﻿using ConsoleApp_Lab1_release.Infrastructure.PetriNet;
 using ConsoleApp_Lab1_release.Models;
+using System.Text;
 
 namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
 {
@@ -28,6 +29,8 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         /// </summary>
         public int QuantumTime { get; set; }
 
+        private static readonly object _consoleLock = new object();
+
         protected int MaxT { get; }
         protected int MaxP { get; }
 
@@ -51,7 +54,7 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         /// Выполнение задач
         /// </summary>
         /// <param name="systemStates">Логи</param>
-        public void Execute(List<string> systemStates, Action action)
+        public void Execute(List<string> systemStates)
         {
             // Получаем порядок выполнения задач от планировщика
             var processQueue = GetProcessQueue();
@@ -61,61 +64,74 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
 
             foreach (var process in processQueue)
             {
-                var task = Task.Run(() => ExecuteProcess(process, systemStates, action));
+                var task = Task.Run(() => ExecuteProcessAsync(process, systemStates));
                 tasks.Add(task);
             }
 
             // Ожидаем завершения всех задач
             Task.WaitAll(tasks.ToArray());
-            PrintFinalProcessReport(systemStates); // Добавленный вызов
+            PrintFinalProcessReport(systemStates);
         }
 
         /// <summary>
         /// Метод для выполнения отдельного процесса
         /// </summary>
-        private void ExecuteProcess(Process process, List<string> systemStates, Action action)
+        private async Task ExecuteProcessAsync(Process process, List<string> systemStates)
         {
             int quantum = 0;
+            var retryCount = 0;
+            const int maxRetries = 3;
 
-            while (process.State != TaskState.Completed)
+            while (process.State != TaskState.Completed & retryCount < maxRetries)
             {
-                //Выводи информацию на начало цикла выполнения
-                PrintDynamicProcessInfo(quantum, systemStates);
+                lock (_consoleLock)
+                {
+                    PrintDynamicProcessInfo(quantum, systemStates);
+                }
 
                 // Пытаемся захватить ресурсы
                 AcquireResources(process);
+
+                lock (_consoleLock)
+                {
+                    PrintDynamicProcessInfo(quantum, systemStates);
+                }
 
                 if (process.State == TaskState.Executing)
                 {
                     // Выполняем процесс
                     int timeToExecute = Math.Min(process.RemainingTime, QuantumTime);
-                    action?.Invoke();
-                    //Thread.Sleep(timeToExecute); // Имитация выполнения
-                    process.RemainingTime -= timeToExecute;
 
-                    //Выводим информацию во время выполнения
-                    PrintDynamicProcessInfo(quantum, systemStates);
+                    process.ExecuteAction?.Invoke();
+
+                    process.RemainingTime -= timeToExecute;
 
                     // Если процесс завершил выполнение, освобождаем ресурсы
                     if (process.RemainingTime <= 0)
                     {
                         process.State = TaskState.Completed;
+                        ReleaseResources(process);
                     }
-
-                    ReleaseResources(process);
+                    else
+                    {
+                        ReleaseResources(process);
+                        process.State = TaskState.Waiting;
+                    }
+                    retryCount = 0;
+                }
+                else
+                {
+                    var delay = Math.Min(100 * (int)Math.Pow(2, retryCount), 1000);
+                    Thread.Sleep(delay);
+                    retryCount++;
                 }
 
                 quantum++;
+                lock (_consoleLock)
+                {
+                    PrintDynamicProcessInfo(quantum, systemStates);
+                }
             }
-
-            // Если процесс не завершен, ждем следующего кванта времени
-            if (process.State != TaskState.Completed)
-            {
-                Thread.Sleep(QuantumTime); // Ожидание следующего кванта времени
-            }
-
-            //Выводим инфромацию в конце процесса
-            PrintDynamicProcessInfo(quantum, systemStates);
         }
 
         /// <summary>
@@ -177,54 +193,58 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         /// </summary>
         /// <param name="process">Задача</param>
         /// <exception cref="InvalidOperationException">Исключение когда не найден ресурс</exception>
-        public void AcquireResources(Process process)
+        private void AcquireResources(Process process)
         {
             // Проверяем, завершен ли процесс
             if (process.State == TaskState.Completed)
-            {
                 return;
-            }
 
-            foreach (var resourceId in process.RequiredResources)
+            var requiredResources = process.RequiredResources
+                .OrderBy(id => id)
+                .Select(id => Resources.FirstOrDefault(r => r.Id == id))
+                .Where(r => r != null)
+                .ToList();
+
+            var lockedResources = new List<Resource>();
+
+            try
             {
-                var resource = Resources.FirstOrDefault(r => r.Id == resourceId);
-
-                if (resource == null)
+                foreach (var res in requiredResources)
                 {
-                    throw new InvalidOperationException($"Resource {resourceId} not found.");
+                    Monitor.Enter(res.LockObject);
+                    lockedResources.Add(res);
                 }
 
-                if (!TryAcquireResources(resource)) return;
+                bool canAcquire = requiredResources.All(res =>
+                    PetriNet.CanFire($"Получить_ресурс_{res.Id}_с_помощью_Процесса_{process.Id}"));
 
-                string transitionName = $"Получить_ресурс_{resourceId}_с_помощью_Процесса_{process.Id}";
 
-                if (PetriNet.CanFire(transitionName))
+                if (canAcquire)
                 {
-                    PetriNet.Fire(transitionName);
-                    Console.WriteLine($"Переход сработал: {transitionName}"); // Вывод в консоль
+                    requiredResources.ForEach(res =>
+                    {
+                        string transitionName = $"Получить_ресурс_{res.Id}_с_помощью_Процесса_{process.Id}";
 
+                        PetriNet.Fire(transitionName);
+                        Console.WriteLine($"Переход сработал: {transitionName}"); // Вывод в консоль
+                        res.AvailableSlots--;
+                        process.AcquiredResources.Add(res.Id);
+                        process.EventHistory.Add((Timestamp: DateTime.Now, transitionName));
+                    });
                     process.State = TaskState.Executing;
-                    process.AcquiredResources.Add(resourceId);
-                    process.EventHistory.Add((Timestamp: DateTime.Now, EventName: $"{transitionName}"));
-                    resource.AvailableSlots--; // Уменьшаем доступные слоты
                 }
                 else
                 {
                     process.State = TaskState.Waiting;
-                    return;
                 }
+
             }
-        }
-
-
-        private bool TryAcquireResources(Resource resource)
-        {
-            if (resource == null || resource.AvailableSlots == 0)
+            finally
             {
-                // Если хотя бы один ресурс недоступен, возвращаем false
-                return false;
+                // Разблокировка в обратном порядке
+                lockedResources.Reverse();
+                lockedResources.ForEach(res => Monitor.Exit(res.LockObject));
             }
-            return true;
         }
 
         /// <summary>
@@ -232,163 +252,220 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         /// </summary>
         /// <param name="process">Задача</param>
         /// <exception cref="InvalidOperationException">Исключение если ресурс не найден</exception>
-        public void ReleaseResources(Process process)
+        private void ReleaseResources(Process process)
         {
             foreach (var resourceId in process.RequiredResources)
             {
-                var resource = Resources.FirstOrDefault(r => r.Id == resourceId);
+                var resource = Resources.First(r => r.Id == resourceId);
                 if (resource == null)
                 {
                     throw new InvalidOperationException($"Resource {resourceId} not found.");
                 }
-                string transitionName = $"Освободить_ресурс_{resourceId}_с_помощью_Процесса_{process.Id}";
 
-                if (PetriNet.CanFire(transitionName))
+                lock (resource.LockObject)
                 {
-                    PetriNet.Fire(transitionName);
-                    Console.WriteLine($"Переход сработал: {transitionName}"); // Вывод в консоль
+                    string transitionName = $"Освободить_ресурс_{resourceId}_с_помощью_Процесса_{process.Id}";
 
-                    process.AcquiredResources.Remove(resourceId);
-                    process.EventHistory.Add((Timestamp: DateTime.Now, EventName: $"{transitionName}"));
-                    resource.AvailableSlots++; // Увеличиваем доступные слоты
+                    if (PetriNet.CanFire(transitionName))
+                    {
+                        PetriNet.Fire(transitionName);
+                        Console.WriteLine($"Переход сработал: {transitionName}"); // Вывод в консоль
+
+                        process.AcquiredResources.Remove(resourceId);
+                        process.EventHistory.Add((Timestamp: DateTime.Now, EventName: $"{transitionName}"));
+                        resource.AvailableSlots++; // Увеличиваем доступные слоты
+                    }
                 }
             }
-            process.State = TaskState.Waiting;
-            if (process.RemainingTime <= 0)
-            {
-                process.State = TaskState.Completed;
-            }
-        }
-
-        public void PrintDynamicProcessInfo(int quantum, List<string> systemState)
-        {
-            string currentSystemState = string.Empty;
-            systemState.Add($"\nКвант времени: {quantum}");
-
-            currentSystemState += $"Квант времени: {quantum}\n";
-
-            systemState.Add("Текущее состояние процессов и их протоколов:");
-
-            currentSystemState += "Текущее состояние процессов и их протоколов:\n";
-
-            // Вывод состояния ресурсов
-            foreach (var resource in Resources)
-            {
-                string resourceState = (resource.AvailableSlots < resource.Capacity) ? "Занят" : "Свободен";
-
-                systemState.Add($"Ресурс {resource.Id} ({resource.Name}): {resourceState}");
-                currentSystemState += $"Ресурс {resource.Id} ({resource.Name}): {resourceState}\n";
-
-            }
-
-            // Вывод состояния процессов
-            foreach (var process in Processes)
-            {
-                string status = process.State switch
-                {
-                    TaskState.NotInitialized => "Не инициализирован",
-                    TaskState.Waiting => "Ожидает",
-                    TaskState.Executing => "Выполняется",
-                    TaskState.Completed => "Завершен",
-                    _ => "Неизвестно"
-                };
-
-                string resources = process.AcquiredResources.Any()
-                    ? string.Join(", ", process.AcquiredResources)
-                    : "Нет";
-
-                // Алфавит процесса
-                var alphabet = new List<string> { "Захват ресурсов", "Выполнение работы", "Освобождение ресурсов" };
-
-                // Префиксная форма (последовательность выполненных действий)
-                var prefixForm = new List<string>();
-                if (process.AcquiredResources.Any()) prefixForm.Add("Захват ресурсов");
-                if (process.State == TaskState.Executing || process.State == TaskState.Completed) prefixForm.Add("Выполнение работы");
-                if (process.State == TaskState.Completed) prefixForm.Add("Освобождение ресурсов");
-
-                // Протокол (последовательность событий)
-                var protocol = new List<string>();
-                if (process.AcquiredResources.Any()) protocol.Add($"Захват ресурсов: {string.Join(", ", process.AcquiredResources)}");
-                if (process.State == TaskState.Executing || process.State == TaskState.Completed) protocol.Add($"Выполнение работы: {process.CpuBurst - process.RemainingTime} мс из {process.CpuBurst} мс");
-                if (process.State == TaskState.Completed) protocol.Add("Освобождение ресурсов");
-
-                // Вывод информации о процессе
-                systemState.Add($"Процесс {process.Id} ({process.Name}):");
-                currentSystemState += $"Процесс {process.Id} ({process.Name}):";
-
-                systemState.Add($"- Состояние: {status}");
-                currentSystemState += $"- Состояние: {status}\n";
-
-                systemState.Add($"- Занятые ресурсы: {resources}");
-                currentSystemState += $"- Занятые ресурсы: {resources}\n";
-
-                systemState.Add($"- Оставшееся время: {process.RemainingTime} мс");
-                currentSystemState += $"- Оставшееся время: {process.RemainingTime} мс\n";
-
-                systemState.Add($"- Алфавит: {string.Join(", ", alphabet)}");
-                currentSystemState += $"- Алфавит: {string.Join(", ", alphabet)}\n";
-
-                systemState.Add($"- Префиксная форма: {string.Join(" -> ", prefixForm)}");
-                currentSystemState += $"- Префиксная форма: {string.Join(" -> ", prefixForm)}\n";
-
-                systemState.Add($"- Протокол: {string.Join(" -> ", protocol)}");
-                currentSystemState += $"- Протокол: {string.Join(" -> ", protocol)}\n";
-                Console.WriteLine(currentSystemState);
-            }
+            process.State = process.RemainingTime > 0 ? TaskState.Waiting : TaskState.Completed;
         }
 
         public void PrintFinalProcessReport(List<string> systemStates)
         {
-            Console.WriteLine("\nФИНАЛЬНЫЙ ОТЧЕТ О ПРОЦЕССАХ");
-            systemStates.Add("\nФИНАЛЬНЫЙ ОТЧЕТ О ПРОЦЕССАХ");
-
-            foreach (var process in Processes)
+            lock (_consoleLock) // Синхронизация вывода
             {
-                // 1. Алфавит процесса
-                var alphabet = new HashSet<string>();
-                foreach (var resourceId in process.RequiredResources)
+                var report = new StringBuilder("\nФИНАЛЬНЫЙ ОТЧЕТ О ПРОЦЕССАХ\n");
+                systemStates.Add(report.ToString());
+                Console.WriteLine(report);
+
+                foreach (var process in Processes.OrderBy(p => p.Id))
                 {
-                    alphabet.Add($"Захват_ресурса_{resourceId}");
-                    alphabet.Add($"Освобождение_ресурса_{resourceId}");
+                    var processReport = new StringBuilder();
+
+                    // 1. Алфавит процесса (на основе реально произошедших событий)
+                    var alphabet = process.EventHistory
+                        .Select(e => NormalizeEventName(e.EventName))
+                        .Distinct()
+                        .ToHashSet();
+
+                    // 2. Префиксная форма (анализ последовательности событий)
+                    var prefixForm = new List<string>();
+                    var acquiredResources = new List<int>();
+                    foreach (var entry in process.EventHistory)
+                    {
+                        var eventName = NormalizeEventName(entry.EventName);
+                        if (eventName.StartsWith("Захват"))
+                        {
+                            var resId = ParseResourceId(entry.EventName);
+                            if (resId.HasValue) acquiredResources.Add(resId.Value);
+                        }
+                        else if (eventName.StartsWith("Освобождение"))
+                        {
+                            var resId = ParseResourceId(entry.EventName);
+                            if (resId.HasValue) acquiredResources.Remove(resId.Value);
+                        }
+
+                        if (!prefixForm.Contains(eventName)) // Упрощенный вариант
+                            prefixForm.Add(eventName);
+                    }
+
+                    // 3. Полный протокол с группировкой по квантам времени
+                    var protocolGroups = process.EventHistory
+                        .GroupBy(e => e.Timestamp.ToString("HH:mm:ss.fff"))
+                        .OrderBy(g => g.Key);
+
+                    // 4. Параллельная композиция (на основе использованных ресурсов)
+                    var parallelProcesses = Processes
+                        .Where(p => p.Id != process.Id &&
+                            p.RequiredResources.Intersect(process.RequiredResources).Any())
+                        .Select(p => p.Name);
+
+                    // Формирование отчета
+                    processReport.AppendLine($"\n[Процесс {process.Id}] {process.Name}");
+                    processReport.AppendLine($"Состояние: {GetStateName(process.State)}");
+                    processReport.AppendLine($"Алфавит: {{{string.Join(", ", alphabet)}}}");
+                    processReport.AppendLine($"Префикс: {string.Join(" → ", prefixForm)}");
+
+                    processReport.AppendLine("\nДетальный протокол:");
+                    foreach (var group in protocolGroups)
+                    {
+                        processReport.AppendLine($"{group.Key}:");
+                        foreach (var entry in group)
+                        {
+                            processReport.AppendLine($"  {NormalizeEventName(entry.EventName)}");
+                        }
+                    }
+
+                    processReport.AppendLine("\nПараллельные процессы:");
+                    processReport.AppendLine(parallelProcesses.Any()
+                        ? string.Join(" || ", parallelProcesses.Prepend(process.Name))
+                        : "Нет параллельных взаимодействий");
+
+                    // Атомарный вывод
+                    var finalReport = processReport.ToString();
+                    systemStates.Add(finalReport);
+                    Console.WriteLine(finalReport);
                 }
-                alphabet.Add("Выполнение_работы");
-
-                // 2. Префиксная форма (последовательность событий)
-                var prefixForm = new List<string>();
-                if (process.AcquiredResources.Count != 0)
-                    prefixForm.Add($"Захват_ресурса_{string.Join(",", process.AcquiredResources)}");
-
-                prefixForm.Add("Выполнение_работы");
-
-                if (process.State == TaskState.Completed)
-                    prefixForm.Add($"Освобождение_ресурса_{string.Join(",", process.AcquiredResources)}");
-
-                // 3. Полный протокол (вся история событий)
-                var fullProtocol = new List<string>();
-                foreach (var entry in process.EventHistory) // Предполагается наличие поля EventHistory в Process
-                {
-                    fullProtocol.Add($"{entry.Timestamp}: {entry.EventName}"); // Формат: "Время: Событие"
-                }
-
-                // 4. Оператор параллельной композиции
-                var parallelProcesses = Processes
-                    .Where(p => p.Id != process.Id && p.AcquiredResources.Intersect(process.AcquiredResources).Any())
-                    .Select(p => p.Name);
-
-                // Вывод информации
-                Console.WriteLine($"\nПроцесс {process.Id} ({process.Name}):");
-                Console.WriteLine($"Алфавит: {{{string.Join(", ", alphabet)}}}");
-                Console.WriteLine($"Префиксная форма: {string.Join(" → ", prefixForm)}");
-                Console.WriteLine($"Полный протокол:\n{string.Join("\n", fullProtocol)}");
-                Console.WriteLine($"Параллельная композиция: {process.Name} || {string.Join(" || ", parallelProcesses)}");
-
-                // Логирование для systemStates
-                systemStates.Add($"\nПроцесс {process.Id} ({process.Name}):");
-                systemStates.Add($"Алфавит: {{{string.Join(", ", alphabet)}}}");
-                systemStates.Add($"Префиксная форма: {string.Join(" → ", prefixForm)}");
-                systemStates.Add($"Полный протокол:\n{string.Join("\n", fullProtocol)}");
-                systemStates.Add($"Параллельная композиция: {process.Name} || {string.Join(" || ", parallelProcesses)}");
             }
+        }
+
+        private string NormalizeEventName(string eventName)
+        {
+            return eventName
+                .Replace("Получить_ресурс_", "Захват ресурса ")
+                .Replace("Освободить_ресурс_", "Освобождение ресурса ")
+                .Replace("_с_помощью_Процесса_", " (Процесс ")
+                .Replace("_", "") + ")";
+        }
+
+        private int? ParseResourceId(string eventName)
+        {
+            var parts = eventName.Split('_');
+            if (parts.Length > 2 && int.TryParse(parts[2], out int id))
+                return id;
+            return null;
+        }
+
+        public void PrintDynamicProcessInfo(int quantum, List<string> systemStates)
+        {
+            lock (_consoleLock) // Полная блокировка всех операций вывода
+            {
+                // 1. Собираем снимок состояния системы
+                var snapshot = new SystemSnapshot
+                {
+                    Timestamp = DateTime.Now,
+                    Quantum = quantum,
+                    Resources = Resources.Select(r => new ResourceState
+                    {
+                        Id = r.Id,
+                        Name = r.Name,
+                        Available = r.AvailableSlots,
+                        Total = r.Capacity
+                    }).ToList(),
+                    Processes = Processes.Select(p => new ProcessState
+                    {
+                        Id = p.Id,
+                        Name = p.Name,
+                        State = p.State,
+                        AcquiredResources = new List<int>(p.AcquiredResources),
+                        RemainingTime = p.RemainingTime
+                    }).ToList()
+                };
+
+                // 2. Формируем отчет на основе снимка
+                var report = new StringBuilder();
+                report.AppendLine($"\n=== Квант времени: {snapshot.Quantum} ===");
+                report.AppendLine($"Время снимка: {snapshot.Timestamp:HH:mm:ss.fff}");
+
+                report.AppendLine("\nСостояние ресурсов:");
+                foreach (var res in snapshot.Resources)
+                {
+                    report.AppendLine($"[R{res.Id}] {res.Name}: {res.Available}/{res.Total}");
+                }
+
+                report.AppendLine("\nСостояние процессов:");
+                foreach (var proc in snapshot.Processes.OrderBy(p => p.Id))
+                {
+                    report.AppendLine($"[P{proc.Id}] {proc.Name}");
+                    report.AppendLine($"  Статус: {GetStateName(proc.State)}");
+                    report.AppendLine($"  Ресурсы: {(proc.AcquiredResources.Any() ? string.Join(", ", proc.AcquiredResources) : "нет")}");
+                    report.AppendLine($"  Осталось: {proc.RemainingTime}мс");
+                    report.AppendLine("-----------------------------------");
+                }
+
+                // 3. Атомарные операции вывода
+                string output = report.ToString();
+                systemStates.Add(output); // Добавляем в логи
+                Console.WriteLine(output); // Вывод в консоль
+            }
+        }
+
+        private string GetStateName(TaskState state)
+        {
+            return state switch
+            {
+                TaskState.NotInitialized => "Не инициализирован",
+                TaskState.Waiting => "Ожидание ресурсов",
+                TaskState.Executing => "Выполнение",
+                TaskState.Completed => "Завершён",
+                _ => "Неизвестное состояние"
+            };
+        }
+
+        // Вспомогательные классы для снимка системы
+        private class SystemSnapshot
+        {
+            public DateTime Timestamp { get; set; }
+            public int Quantum { get; set; }
+            public List<ResourceState> Resources { get; set; }
+            public List<ProcessState> Processes { get; set; }
+        }
+
+        private class ResourceState
+        {
+            public int Id { get; set; }
+            public string Name { get; set; }
+            public int Available { get; set; }
+            public int Total { get; set; }
+        }
+
+        private class ProcessState
+        {
+            public int Id { get; set; }
+            public string Name { get; set; }
+            public TaskState State { get; set; }
+            public List<int> AcquiredResources { get; set; }
+            public int RemainingTime { get; set; }
         }
     }
 }

@@ -12,7 +12,7 @@ namespace ConsoleApp_Lab1_release.Controllers
         private readonly List<string> _systemLog = new List<string>();
         private int _operand1;
         private int _operand2;
-        private int _result;
+        private Dictionary<string,int> _result;
 
         public ParallelProcessManager(SchedulerType schedulerType, int quantumTime = 100)
         {
@@ -35,6 +35,7 @@ namespace ConsoleApp_Lab1_release.Controllers
             // Добавляем ресурсы
             var dataResource = new Resource(1, "DataResource", 1);
             var resultResource = new Resource(2, "ResultResource", 1);
+            _result = new Dictionary<string, int>();
             _resourceManager.AddResource(dataResource);
             _resourceManager.AddResource(resultResource);
 
@@ -43,18 +44,32 @@ namespace ConsoleApp_Lab1_release.Controllers
                 id: 1,
                 name: "Process1",
                 priority: 3,
-                cpuBurst: 200,
+                cpuBurst: 400,
                 count: 1,
-                requiredResources: new List<int> { 1, 2 }
+                requiredResources: new List<int> { 1, 2 },
+                execute: () =>
+                {
+                    if (_result.Keys.Contains("Результат Process1"))
+                        _result["Результат Process1"] = Convert.ToInt32(_operand1 > _operand2);
+                    else
+                        _result.Add("Результат Process1", Convert.ToInt32(_operand1 > _operand2));
+                }
             );
             // Создаем процессы
             var process2 = new Process(
                 id: 2,
                 name: "Process2",
                 priority: 1,
-                cpuBurst: 200,
+                cpuBurst: 500,
                 count: 1,
-                requiredResources: new List<int> { 1, 2 }
+                requiredResources: new List<int> { 1, 2 },
+                execute: () =>
+                {
+                    if (_result.Keys.Contains("Результат Process2"))
+                        _result["Результат Process2"] = Convert.ToInt32(_operand1 < _operand2);
+                    else
+                        _result.Add("Результат Process2", Convert.ToInt32(_operand1 < _operand2));
+                }
             );
             // Создаем процессы
             var process3 = new Process(
@@ -63,7 +78,14 @@ namespace ConsoleApp_Lab1_release.Controllers
                 priority: 2,
                 cpuBurst: 200,
                 count: 1,
-                requiredResources: new List<int> { 1, 2 }
+                requiredResources: new List<int> { 1, 2 },
+                execute: () =>
+                {
+                    if (_result.Keys.Contains("Результат Process3"))
+                        _result["Результат Process3"] = Convert.ToInt32(_operand1 == _operand2);
+                    else
+                        _result.Add("Результат Process3", Convert.ToInt32(_operand1 == _operand2));
+                }
             );
             _resourceManager.AddProcess(process1);
             _resourceManager.AddProcess(process2);
@@ -72,18 +94,17 @@ namespace ConsoleApp_Lab1_release.Controllers
 
         public void Run()
         {
-            _resourceManager.Execute(_systemLog, () =>
-            {
-                _result = Convert.ToInt32(_operand1 == _operand2);
-            });
+            _resourceManager.Execute(_systemLog);
             PrintResults();
         }
 
         private void PrintResults()
         {
             Console.WriteLine("\n=== Результат проверки ===");
-            Console.WriteLine($"Операнд 1: {_operand1}, Операнд 2: {_operand2}");
-            Console.WriteLine($"Результат: {_result}");
+            foreach (var item in _result)
+            {
+                Console.WriteLine($"{item.Key} - {item.Value}");
+            }
         }
     }
 

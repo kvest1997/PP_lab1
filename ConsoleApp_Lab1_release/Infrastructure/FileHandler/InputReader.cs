@@ -51,7 +51,10 @@ namespace ConsoleApp_Lab1_release.Infrastructure
 
                 int count = int.Parse(parts[4].Trim());
                 var requiredResources = parts[5].Trim().Split(' ').Select(int.Parse).ToList();
-                processes.Add(new Process(id, name, priority, cpuBurst, count, requiredResources));
+                processes.Add(new Process(id, name, priority, cpuBurst, count, requiredResources, () =>
+                {
+                    Task.Delay(cpuBurst);
+                }));
             }
 
             return (pa, qt, maxT, maxP, resources, processes);

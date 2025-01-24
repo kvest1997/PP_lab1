@@ -15,6 +15,8 @@
         /// </summary>
         public List<Transition> Transitions { get; } = new List<Transition>();
 
+        private readonly object _sync = new object();
+
         /// <summary>
         /// Добавление места
         /// </summary>
@@ -82,13 +84,16 @@
         /// <exception cref="ArgumentException">Исключение: если переход не найден</exception>
         public bool CanFire(string transitionName)
         {
-            var transition = Transitions.FirstOrDefault(t => t.Name == transitionName);
-            if (transition == null)
+            lock (_sync)
             {
-                throw new ArgumentException("Переход не найден.");
-            }
+                var transition = Transitions.FirstOrDefault(t => t.Name == transitionName);
+                if (transition == null)
+                {
+                    throw new ArgumentException("Переход не найден.");
+                }
 
-            return transition.CanFire();
+                return transition.CanFire();
+            }
         }
 
         /// <summary>
@@ -98,13 +103,16 @@
         /// <exception cref="ArgumentException">Исключение: если переход не найден</exception>
         public void Fire(string transitionName)
         {
-            var transition = Transitions.FirstOrDefault(t => t.Name == transitionName);
-            if (transition == null)
+            lock (_sync)
             {
-                throw new ArgumentException("Переход не найден.");
-            }
+                var transition = Transitions.FirstOrDefault(t => t.Name == transitionName);
+                if (transition == null)
+                {
+                    throw new ArgumentException("Переход не найден.");
+                }
 
-            transition.Fire();
+                transition.Fire();
+            }
         }
 
         /// <summary>
