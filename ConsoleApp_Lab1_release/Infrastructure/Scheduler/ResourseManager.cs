@@ -67,7 +67,7 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
 
             foreach (var process in processQueue)
             {
-                var task = Task.Run(() => ExecuteProcessAsync(process, systemStates));
+                var task = Task.Run(() => ExecuteProcess(process, systemStates));
                 tasks.Add(task);
             }
 
@@ -79,7 +79,7 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         /// <summary>
         /// Метод для выполнения отдельного процесса
         /// </summary>
-        private async Task ExecuteProcessAsync(Process process, List<string> systemStates)
+        private void ExecuteProcess(Process process, List<string> systemStates)
         {
             int quantum = 0;
             var retryCount = 0;
@@ -140,6 +140,20 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         }
 
         /// <summary>
+        /// Получение ресурсов
+        /// </summary>
+        /// <typeparam name="T">Тип ресурса</typeparam>
+        /// <param name="id">Id ресурса</param>
+        /// <returns>Объект ресурса</returns>
+        /// <exception cref="KeyNotFoundException">Исключение: если ресурс не найден</exception>
+        public T GetResource<T>(int id) where T : Resource
+        {
+            var resource = Resources.FirstOrDefault(r => r.Id == id) as T;
+            return resource ?? throw new KeyNotFoundException($"Ресурс {id} типа {typeof(T).Name} не найден");
+        }
+
+        #region Создание объектов Ресурсы, Процессы, дуги
+        /// <summary>
         /// Добавить ресурсы
         /// </summary>
         /// <param name="resource">Объект ресурса</param>
@@ -192,7 +206,78 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
             PetriNet.AddOutputArc(transitionName, $"Ресурс_{resourceId}_Свободен");
             PetriNet.AddOutputArc(transitionName, $"Процесс_{process.Id}_Ожидает");
         }
+        #endregion
 
+        #region Методы освобождения ресурсов
+        /// <summary>
+        /// Вспомогательный метод для освобождения ресурсов
+        /// </summary>
+        /// <param name="resource"></param>
+        /// <param name="process"></param>
+        /// <returns></returns>
+        private bool TryReleaseResource(Resource resource, Process process)
+        {
+            if (!process.TryReleaseResource(resource.Id)) return false;
+
+            resource.ReleaseSlot();
+            return true;
+        }
+
+        /// <summary>
+        /// Освобождение ресурсов
+        /// </summary>
+        /// <param name="process">Задача</param>
+        /// <exception cref="InvalidOperationException">Исключение если ресурс не найден</exception>
+        private void ReleaseResources(Process process)
+        {
+            var resources = process.RequiredResources
+                .OrderByDescending(id => id)
+                .Select(id => Resources.FirstOrDefault(r => r.Id == id))
+                .Where(r => r != null)
+                .ToList();
+
+            if (!resources.Any()) return;
+            var lockedResources = resources
+                .Select(r =>
+                {
+                    Monitor.Enter(r.LockObject);
+                    return r;
+                }).ToList();
+
+            try
+            {
+                // 3. Освобождаем ресурсы
+                foreach (var resource in resources)
+                {
+                    string transitionName = $"Освободить_ресурс_{resource.Id}_с_помощью_Процесса_{process.Id}";
+
+                    if (!PetriNet.CanFire(transitionName))
+                        throw new InvalidOperationException($"Переход {transitionName} не сработал");
+
+                    PetriNet.Fire(transitionName);
+                    Console.WriteLine($"Переход сработал: {transitionName}"); // Вывод в консоль
+                    process.EventHistory.Add((Timestamp: DateTime.Now, EventName: $"{transitionName}"));
+
+                    if (!TryReleaseResource(resource, process))
+                    {
+                        throw new InvalidOperationException($"Не удалось освободить ресурс {resource.Id} для процесса {process.Id}");
+                    }
+                }
+
+                // 4. Обновляем состояние процесса
+                process.SetState(process.RemainingTime > 0
+                    ? TaskState.Waiting
+                    : TaskState.Completed);
+            }
+            finally
+            {
+                // 5. Гарантированная разблокировка
+                lockedResources.ForEach(r => Monitor.Exit(r.LockObject));
+            }
+        }
+        #endregion
+
+        #region Методы захвата ресурсов
         /// <summary>
         /// Получение ресурсов
         /// </summary>
@@ -271,74 +356,9 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
 
             return true;
         }
+        #endregion
 
-        /// <summary>
-        /// Вспомогательный метод для освобождения ресурсов
-        /// </summary>
-        /// <param name="resource"></param>
-        /// <param name="process"></param>
-        /// <returns></returns>
-        private bool TryReleaseResource(Resource resource, Process process)
-        {
-            if (!process.TryReleaseResource(resource.Id)) return false;
-
-            resource.ReleaseSlot();
-            return true;
-        }
-
-        /// <summary>
-        /// Освобождение ресурсов
-        /// </summary>
-        /// <param name="process">Задача</param>
-        /// <exception cref="InvalidOperationException">Исключение если ресурс не найден</exception>
-        private void ReleaseResources(Process process)
-        {
-            var resources = process.RequiredResources
-                .OrderByDescending(id => id)
-                .Select(id => Resources.FirstOrDefault(r => r.Id == id))
-                .Where(r => r != null)
-                .ToList();
-
-            if (!resources.Any()) return;
-            var lockedResources = resources
-                .Select(r =>
-                {
-                    Monitor.Enter(r.LockObject);
-                    return r;
-                }).ToList();
-
-            try
-            {
-                // 3. Освобождаем ресурсы
-                foreach (var resource in resources)
-                {
-                    string transitionName = $"Освободить_ресурс_{resource.Id}_с_помощью_Процесса_{process.Id}";
-
-                    if (!PetriNet.CanFire(transitionName))
-                        throw new InvalidOperationException($"Переход {transitionName} не сработал");
-
-                    PetriNet.Fire(transitionName);
-                    Console.WriteLine($"Переход сработал: {transitionName}"); // Вывод в консоль
-                    process.EventHistory.Add((Timestamp: DateTime.Now, EventName: $"{transitionName}"));
-
-                    if (!TryReleaseResource(resource, process))
-                    {
-                        throw new InvalidOperationException($"Не удалось освободить ресурс {resource.Id} для процесса {process.Id}");
-                    }
-                }
-
-                // 4. Обновляем состояние процесса
-                process.SetState(process.RemainingTime > 0
-                    ? TaskState.Waiting
-                    : TaskState.Completed);
-            }
-            finally
-            {
-                // 5. Гарантированная разблокировка
-                lockedResources.ForEach(r => Monitor.Exit(r.LockObject));
-            }
-        }
-
+        #region Методы для вывода информации
         /// <summary>
         /// Вывод финального отчета
         /// </summary>
@@ -423,46 +443,6 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         }
 
         /// <summary>
-        /// Получение ресурсов
-        /// </summary>
-        /// <typeparam name="T">Тип ресурса</typeparam>
-        /// <param name="id">Id ресурса</param>
-        /// <returns>Объект ресурса</returns>
-        /// <exception cref="KeyNotFoundException">Исключение: если ресурс не найден</exception>
-        public T GetResource<T>(int id) where T : Resource
-        {
-            var resource = Resources.FirstOrDefault(r => r.Id == id) as T;
-            return resource ?? throw new KeyNotFoundException($"Ресурс {id} типа {typeof(T).Name} не найден");
-        }
-
-        /// <summary>
-        /// Нормализация события из истории
-        /// </summary>
-        /// <param name="eventName">Имя события</param>
-        /// <returns>Измененное название</returns>
-        private string NormalizeEventName(string eventName)
-        {
-            return eventName
-                .Replace("Получить_ресурс_", "Захват ресурса ")
-                .Replace("Освободить_ресурс_", "Освобождение ресурса ")
-                .Replace("_с_помощью_Процесса_", " (Процесс ")
-                .Replace("_", "") + ")";
-        }
-
-        /// <summary>
-        /// Получение Id ресурса
-        /// </summary>
-        /// <param name="eventName">Имя события</param>
-        /// <returns>Id ресурса</returns>
-        private int? ParseResourceId(string eventName)
-        {
-            var parts = eventName.Split('_');
-            if (parts.Length > 2 && int.TryParse(parts[2], out int id))
-                return id;
-            return null;
-        }
-
-        /// <summary>
         /// Динамический вывод информации
         /// </summary>
         /// <param name="quantum">Квант времени</param>
@@ -520,7 +500,35 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                 Console.WriteLine(output); // Вывод в консоль
             }
         }
+        #endregion
 
+        #region Вспомогательные методы для вывода информации
+        /// <summary>
+        /// Нормализация события из истории
+        /// </summary>
+        /// <param name="eventName">Имя события</param>
+        /// <returns>Измененное название</returns>
+        private string NormalizeEventName(string eventName)
+        {
+            return eventName
+                .Replace("Получить_ресурс_", "Захват ресурса ")
+                .Replace("Освободить_ресурс_", "Освобождение ресурса ")
+                .Replace("_с_помощью_Процесса_", " (Процесс ")
+                .Replace("_", "") + ")";
+        }
+
+        /// <summary>
+        /// Получение Id ресурса
+        /// </summary>
+        /// <param name="eventName">Имя события</param>
+        /// <returns>Id ресурса</returns>
+        private int? ParseResourceId(string eventName)
+        {
+            var parts = eventName.Split('_');
+            if (parts.Length > 2 && int.TryParse(parts[2], out int id))
+                return id;
+            return null;
+        }
 
         /// <summary>
         /// Получение имени статуса
@@ -538,5 +546,6 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                 _ => "Неизвестное состояние"
             };
         }
+        #endregion
     }
 }
