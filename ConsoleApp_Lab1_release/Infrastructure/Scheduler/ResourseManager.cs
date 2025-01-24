@@ -210,51 +210,80 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                 .Where(r => r != null)
                 .ToList();
 
-            var lockedResources = new List<Resource>();
+            var lockedResources = requiredResources
+                .Select(r =>
+                {
+                    Monitor.Enter(r.LockObject);
+                    return r;
+                }).ToList();
 
             try
             {
-                foreach (var res in requiredResources)
-                {
-                    Monitor.Enter(res.LockObject);
-                    lockedResources.Add(res);
-                }
-
                 bool canAcquire = requiredResources.All(res =>
                     PetriNet.CanFire($"Получить_ресурс_{res.Id}_с_помощью_Процесса_{process.Id}"));
 
+                process.SetState(canAcquire ? TaskState.Executing : TaskState.Waiting);
 
-                if (canAcquire)
+                if (!canAcquire) return;
+
+                foreach (var resource in requiredResources)
                 {
-                    requiredResources.ForEach(res =>
+                    string transitionName = $"Получить_ресурс_{resource.Id}_с_помощью_Процесса_{process.Id}";
+
+                    PetriNet.Fire(transitionName);
+                    Console.WriteLine($"Переход сработал: {transitionName}");
+
+                    if (!TryAcquireResource(resource, process))
                     {
-                        string transitionName = $"Получить_ресурс_{res.Id}_с_помощью_Процесса_{process.Id}";
+                        process.SetState(TaskState.Waiting);
+                    }
 
-                        PetriNet.Fire(transitionName);
-                        Console.WriteLine($"Переход сработал: {transitionName}"); // Вывод в консоль
-                        res.TryAcquireSlot();
-
-                        bool success = process.TryAddAcquiredResource(res.Id);
-                        process.EventHistory.Add((Timestamp: DateTime.Now, transitionName));
-                        if (!success)
-                        {
-                            res.ReleaseSlot();
-                        }
-                    });
-                    process.SetState(TaskState.Executing);
-                }
-                else
-                {
-                    process.SetState(TaskState.Waiting);
+                    process.EventHistory.Add((DateTime.Now, transitionName));
                 }
 
             }
             finally
             {
                 // Разблокировка в обратном порядке
-                lockedResources.Reverse();
-                lockedResources.ForEach(res => Monitor.Exit(res.LockObject));
+                lockedResources
+                    .AsEnumerable()
+                    .Reverse()
+                    .ToList()
+                    .ForEach(r => Monitor.Exit(r.LockObject));
             }
+        }
+
+        /// <summary>
+        /// Вспомогательный метод для захвата ресурсов
+        /// </summary>
+        /// <param name="resource"></param>
+        /// <param name="process"></param>
+        /// <returns></returns>
+        private bool TryAcquireResource(Resource resource, Process process)
+        {
+            if (!resource.TryAcquireSlot()) return false;
+
+            if (!process.TryAddAcquiredResource(resource.Id))
+            {
+                resource.ReleaseSlot();
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Вспомогательный метод для освобождения ресурсов
+        /// </summary>
+        /// <param name="resource"></param>
+        /// <param name="process"></param>
+        /// <returns></returns>
+        private bool TryReleaseResource(Resource resource, Process process)
+        {
+            if (!process.TryReleaseResource(resource.Id)) return false;
+
+            resource.ReleaseSlot();
+            return true;
         }
 
         /// <summary>
@@ -264,34 +293,50 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         /// <exception cref="InvalidOperationException">Исключение если ресурс не найден</exception>
         private void ReleaseResources(Process process)
         {
-            foreach (var resourceId in process.RequiredResources)
+            var resources = process.RequiredResources
+                .OrderByDescending(id => id)
+                .Select(id => Resources.FirstOrDefault(r => r.Id == id))
+                .Where(r => r != null)
+                .ToList();
+
+            if (!resources.Any()) return;
+            var lockedResources = resources
+                .Select(r =>
+                {
+                    Monitor.Enter(r.LockObject);
+                    return r;
+                }).ToList();
+
+            try
             {
-                var resource = Resources.First(r => r.Id == resourceId);
-                if (resource == null)
+                // 3. Освобождаем ресурсы
+                foreach (var resource in resources)
                 {
-                    throw new InvalidOperationException($"Resource {resourceId} not found.");
-                }
+                    string transitionName = $"Освободить_ресурс_{resource.Id}_с_помощью_Процесса_{process.Id}";
 
-                lock (resource.LockObject)
-                {
-                    string transitionName = $"Освободить_ресурс_{resourceId}_с_помощью_Процесса_{process.Id}";
+                    if (!PetriNet.CanFire(transitionName))
+                        throw new InvalidOperationException($"Переход {transitionName} не сработал");
 
-                    if (PetriNet.CanFire(transitionName))
+                    PetriNet.Fire(transitionName);
+                    Console.WriteLine($"Переход сработал: {transitionName}"); // Вывод в консоль
+                    process.EventHistory.Add((Timestamp: DateTime.Now, EventName: $"{transitionName}"));
+
+                    if (!TryReleaseResource(resource, process))
                     {
-                        PetriNet.Fire(transitionName);
-                        Console.WriteLine($"Переход сработал: {transitionName}"); // Вывод в консоль
-
-                        bool success = process.TryReleaseResource(resourceId);
-
-                        process.EventHistory.Add((Timestamp: DateTime.Now, EventName: $"{transitionName}"));
-                        if (success)
-                        {
-                            resource.ReleaseSlot(); // Увеличиваем доступные слоты
-                        }
+                        throw new InvalidOperationException($"Не удалось освободить ресурс {resource.Id} для процесса {process.Id}");
                     }
                 }
+
+                // 4. Обновляем состояние процесса
+                process.SetState(process.RemainingTime > 0
+                    ? TaskState.Waiting
+                    : TaskState.Completed);
             }
-            process.SetState(process.RemainingTime > 0 ? TaskState.Waiting : TaskState.Completed);
+            finally
+            {
+                // 5. Гарантированная разблокировка
+                lockedResources.ForEach(r => Monitor.Exit(r.LockObject));
+            }
         }
 
         /// <summary>
