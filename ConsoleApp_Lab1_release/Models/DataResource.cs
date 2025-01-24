@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace ConsoleApp_Lab1_release.Models
+﻿namespace ConsoleApp_Lab1_release.Models
 {
     /// <summary>
     /// Данные ресурса

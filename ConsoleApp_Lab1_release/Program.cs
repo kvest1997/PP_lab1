@@ -1,8 +1,4 @@
 ﻿using ConsoleApp_Lab1_release.Controllers;
-using ConsoleApp_Lab1_release.Infrastructure;
-using ConsoleApp_Lab1_release.Infrastructure.PetriNet;
-using ConsoleApp_Lab1_release.Infrastructure.Scheduler;
-using ConsoleApp_Lab1_release.Models;
 
 namespace ConsoleApp_Lab1_release
 {
