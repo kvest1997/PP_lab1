@@ -64,7 +64,7 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
 
             foreach (var process in processQueue)
             {
-                var task = Task.Run(() => ExecuteProcessAsync(process, systemStates));
+                var task = Task.Run(() => ExecuteProcess(process, systemStates));
                 tasks.Add(task);
             }
 
@@ -76,7 +76,7 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         /// <summary>
         /// Метод для выполнения отдельного процесса
         /// </summary>
-        private async Task ExecuteProcessAsync(Process process, List<string> systemStates)
+        private void ExecuteProcess(Process process, List<string> systemStates)
         {
             int quantum = 0;
             var retryCount = 0;
@@ -102,20 +102,20 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                     // Выполняем процесс
                     int timeToExecute = Math.Min(process.RemainingTime, QuantumTime);
 
-                    process.ExecuteAction?.Invoke();
+                    process.ExecuteLogic?.Invoke(this);
 
                     process.RemainingTime -= timeToExecute;
 
                     // Если процесс завершил выполнение, освобождаем ресурсы
                     if (process.RemainingTime <= 0)
                     {
-                        process.State = TaskState.Completed;
+                        process.SetState(TaskState.Completed);
                         ReleaseResources(process);
                     }
                     else
                     {
                         ReleaseResources(process);
-                        process.State = TaskState.Waiting;
+                        process.SetState(TaskState.Waiting);
                     }
                     retryCount = 0;
                 }
@@ -227,15 +227,16 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
 
                         PetriNet.Fire(transitionName);
                         Console.WriteLine($"Переход сработал: {transitionName}"); // Вывод в консоль
-                        res.AvailableSlots--;
-                        process.AcquiredResources.Add(res.Id);
+                        res.TryAcquireSlot();
+
+                        process.TryAddAcquiredResource(res.Id);
                         process.EventHistory.Add((Timestamp: DateTime.Now, transitionName));
                     });
-                    process.State = TaskState.Executing;
+                    process.SetState(TaskState.Executing);
                 }
                 else
                 {
-                    process.State = TaskState.Waiting;
+                    process.SetState(TaskState.Waiting);
                 }
 
             }
@@ -271,16 +272,20 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                         PetriNet.Fire(transitionName);
                         Console.WriteLine($"Переход сработал: {transitionName}"); // Вывод в консоль
 
-                        process.AcquiredResources.Remove(resourceId);
+                        process.TryReleaseResource(resourceId);
                         process.EventHistory.Add((Timestamp: DateTime.Now, EventName: $"{transitionName}"));
-                        resource.AvailableSlots++; // Увеличиваем доступные слоты
+                        resource.ReleaseSlot(); // Увеличиваем доступные слоты
                     }
                 }
             }
-            process.State = process.RemainingTime > 0 ? TaskState.Waiting : TaskState.Completed;
+            process.SetState(process.RemainingTime > 0 ? TaskState.Waiting : TaskState.Completed);
         }
 
-        public void PrintFinalProcessReport(List<string> systemStates)
+        /// <summary>
+        /// Вывод финального отчета
+        /// </summary>
+        /// <param name="systemStates">Логи</param>
+        private void PrintFinalProcessReport(List<string> systemStates)
         {
             lock (_consoleLock) // Синхронизация вывода
             {
@@ -357,6 +362,12 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                     Console.WriteLine(finalReport);
                 }
             }
+        }
+
+        public T GetResource<T>(int id) where T : Resource
+        {
+            var resource = Resources.FirstOrDefault(r => r.Id == id) as T;
+            return resource ?? throw new KeyNotFoundException($"Resource {id} of type {typeof(T).Name} not found");
         }
 
         private string NormalizeEventName(string eventName)

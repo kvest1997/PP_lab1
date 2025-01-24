@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using ConsoleApp_Lab1_release.Infrastructure.Scheduler;
+using System.Diagnostics;
 
 namespace ConsoleApp_Lab1_release.Models
 {
@@ -7,6 +8,12 @@ namespace ConsoleApp_Lab1_release.Models
     /// </summary>
     internal class Process
     {
+        private readonly object _stateLock = new();
+        private readonly object _resourcesLock = new();
+        private TaskState _state = TaskState.NotInitialized;
+        private readonly List<int> _acquiredResources = new();
+
+
         /// <summary>
         /// Уникальный идентификатор потока
         /// </summary>
@@ -38,16 +45,6 @@ namespace ConsoleApp_Lab1_release.Models
         public List<int> RequiredResources { get; set; } 
 
         /// <summary>
-        /// Статус
-        /// </summary>
-        public TaskState State { get; set; } = TaskState.NotInitialized;
-
-        /// <summary>
-        /// Занятые ресурсы
-        /// </summary>
-        public List<int> AcquiredResources { get; set; } = new List<int>();
-
-        /// <summary>
         /// Оставшееся время выполнения
         /// </summary>
         public int RemainingTime { get; set; }
@@ -55,9 +52,9 @@ namespace ConsoleApp_Lab1_release.Models
         /// <summary>
         /// История событий
         /// </summary>
-        public List<(DateTime Timestamp, string EventName)> EventHistory { get; } = new List<(DateTime, string)>();
+        public List<(DateTime Timestamp, string EventName)> EventHistory { get; } = new();
 
-        public Action ExecuteAction { get; }
+        public Action<ResourceManager> ExecuteLogic { get; }
         public CancellationTokenSource Cts { get; } = new();
 
 
@@ -71,7 +68,7 @@ namespace ConsoleApp_Lab1_release.Models
         /// <param name="requiredResources">Список требуемых ресурсов</param>
         public Process(int id, string name, 
             int priority, int cpuBurst, 
-            int count, List<int> requiredResources, Action execute)
+            int count, List<int> requiredResources, Action<ResourceManager> execute)
         {
             Id = id;
             Name = name;
@@ -80,21 +77,79 @@ namespace ConsoleApp_Lab1_release.Models
             Count = count;
             RequiredResources = requiredResources;
             RemainingTime = cpuBurst;
-            ExecuteAction = execute;
+            ExecuteLogic = execute;
         }
 
-        public async Task ExecuteAsync()
+        public async Task ExecuteAsync(ResourceManager manager)
         {
             var sw = Stopwatch.StartNew();
             await Task.Run(() =>
             {
-                ExecuteAction();
+                try
+                {
+                    ExecuteLogic?.Invoke(manager);
+                }
+                finally
+                {
+                    Cts.Dispose();
+                }
+
                 while (sw.ElapsedMilliseconds < CpuBurst)
                 {
                     if (Cts.Token.IsCancellationRequested) break;
                 }
             }, Cts.Token);
         }
+
+        public TaskState State
+        {
+            get
+            {
+                lock (_stateLock)
+                {
+                    return _state;
+                }
+            }
+        }
+
+        public IReadOnlyList<int> AcquiredResources
+        {
+            get
+            {
+                lock (_resourcesLock)
+                {
+                    return _acquiredResources.AsReadOnly();
+                }
+            }
+        }
+
+        public void SetState(TaskState newState)
+        {
+            lock (_stateLock)
+            {
+                _state = newState;
+            }
+        }
+
+        public bool TryAddAcquiredResource(int resourceId)
+        {
+            lock (_resourcesLock)
+            {
+                if (_acquiredResources.Contains(resourceId)) return false;
+                _acquiredResources.Add(resourceId);
+                return true;
+            }
+        }
+
+        public bool TryReleaseResource(int resourceId)
+        {
+            lock (_resourcesLock)
+            {
+                return _acquiredResources.Remove(resourceId);
+            }
+        }
+
+
     }
 
     /// <summary>

@@ -5,6 +5,9 @@
     /// </summary>
     internal class Resource
     {
+        private readonly object _dataLock = new();
+        public object Data { get; protected set; }
+
         /// <summary>
         /// Уникальный Id
         /// </summary>
@@ -42,6 +45,43 @@
             Name = name;
             Capacity = capacity;
             AvailableSlots = capacity;
+        }
+
+        public virtual T GetData<T>() where T : class
+        {
+            lock (_dataLock)
+            {
+                return Data as T;
+            }
+        }
+
+        public virtual void UpdateData<T>(Action<T> updateAction) where T : class
+        {
+            lock (_dataLock)
+            {
+                if (Data is T typedData)
+                {
+                    updateAction(typedData);
+                }
+            }
+        }
+
+        public bool TryAcquireSlot()
+        {
+            lock (LockObject)
+            {
+                if (AvailableSlots <= 0) return false;
+                AvailableSlots--;
+                return true;
+            }
+        }
+
+        public void ReleaseSlot()
+        {
+            lock (LockObject)
+            {
+                AvailableSlots = Math.Min(AvailableSlots + 1, Capacity);
+            }
         }
     }
 }

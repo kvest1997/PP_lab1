@@ -2,6 +2,7 @@
 using ConsoleApp_Lab1_release.Infrastructure.Scheduler;
 using ConsoleApp_Lab1_release.Models;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 
 namespace ConsoleApp_Lab1_release.Controllers
@@ -15,7 +16,6 @@ namespace ConsoleApp_Lab1_release.Controllers
         private readonly List<string> _systemLog = new List<string>();
         private int _operand1;
         private int _operand2;
-        private Dictionary<string,int> _result;
 
         public ParallelProcessManager(SchedulerType schedulerType, int quantumTime = 100)
         {
@@ -39,9 +39,10 @@ namespace ConsoleApp_Lab1_release.Controllers
         private void InitializeResourcesAndProcesses()
         {
             // Добавляем ресурсы
-            var dataResource = new Resource(1, "DataResource", 1);
-            var resultResource = new Resource(2, "ResultResource", 1);
-            _result = new Dictionary<string, int>();
+            var dataResource = new DataResource<Operands>(1, "DataResource", 1, data: new Operands { Op1 = _operand1, Op2 = _operand2});
+            
+            var resultResource = new ResultResource(2, "ResultResource", 1);
+
             _resourceManager.AddResource(dataResource);
             _resourceManager.AddResource(resultResource);
 
@@ -53,12 +54,11 @@ namespace ConsoleApp_Lab1_release.Controllers
                 cpuBurst: 400,
                 count: 1,
                 requiredResources: new List<int> { 1, 2 },
-                execute: () =>
+                execute: manager =>
                 {
-                    if (_result.Keys.Contains("Результат Process1"))
-                        _result["Результат Process1"] = Convert.ToInt32(_operand1 > _operand2);
-                    else
-                        _result.Add("Результат Process1", Convert.ToInt32(_operand1 > _operand2));
+                    var data = manager.GetResource<DataResource<Operands>>(1).GetOperands();
+                    var result = data.Op1 > data.Op2;
+                    manager.GetResource<ResultResource>(2).AddResult(1, result);
                 }
             );
             // Создаем процессы
@@ -69,12 +69,11 @@ namespace ConsoleApp_Lab1_release.Controllers
                 cpuBurst: 500,
                 count: 1,
                 requiredResources: new List<int> { 1, 2 },
-                execute: () =>
+                execute: manager =>
                 {
-                    if (_result.Keys.Contains("Результат Process2"))
-                        _result["Результат Process2"] = Convert.ToInt32(_operand1 < _operand2);
-                    else
-                        _result.Add("Результат Process2", Convert.ToInt32(_operand1 < _operand2));
+                    var data = manager.GetResource<DataResource<Operands>>(1).GetOperands();
+                    var result = data.Op1 < data.Op2;
+                    manager.GetResource<ResultResource>(2).AddResult(2, result);
                 }
             );
             // Создаем процессы
@@ -85,12 +84,11 @@ namespace ConsoleApp_Lab1_release.Controllers
                 cpuBurst: 200,
                 count: 1,
                 requiredResources: new List<int> { 1, 2 },
-                execute: () =>
+                execute: manager =>
                 {
-                    if (_result.Keys.Contains("Результат Process3"))
-                        _result["Результат Process3"] = Convert.ToInt32(_operand1 == _operand2);
-                    else
-                        _result.Add("Результат Process3", Convert.ToInt32(_operand1 == _operand2));
+                    var data = manager.GetResource<DataResource<Operands>>(1).GetOperands();
+                    var result = data.Op1 == data.Op2;
+                    manager.GetResource<ResultResource>(2).AddResult(3, result);
                 }
             );
             _resourceManager.AddProcess(process1);
@@ -113,8 +111,11 @@ namespace ConsoleApp_Lab1_release.Controllers
         /// </summary>
         private void PrintResults()
         {
+            var resultResource = _resourceManager.GetResource<ResultResource>(2);
+            var results = resultResource.GetResults();
+
             Console.WriteLine("\n=== Результат проверки ===");
-            foreach (var item in _result)
+            foreach (var item in results)
             {
                 Console.WriteLine($"{item.Key} - {item.Value}");
             }

@@ -12,7 +12,7 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         public LCFS(int quantumTime = 100, int maxT = 1000, int maxP = 10) 
             : base(quantumTime, maxT, maxP) { }
 
-
+        
         public override void AddProcess(Process process)
         {
             _stack.Push(process);
