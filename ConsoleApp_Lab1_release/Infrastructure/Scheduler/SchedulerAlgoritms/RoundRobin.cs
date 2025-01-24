@@ -1,7 +1,7 @@
 ﻿using ConsoleApp_Lab1_release.Models;
 using System.Collections.Concurrent;
 
-namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
+namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler.SchedulerAlgoritms
 {
     internal class RoundRobin : ResourceManager
     {
@@ -29,8 +29,8 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         /// <summary>
         /// Получаем очередь процессов по принципу Round Robin
         /// </summary>
-        protected override IReadOnlyCollection<Process> GetProcessQueue() 
+        protected override IReadOnlyCollection<Process> GetProcessQueue()
             => _queue.ToList().AsReadOnly();
 
     }
- }
+}

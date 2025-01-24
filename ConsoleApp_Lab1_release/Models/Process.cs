@@ -54,8 +54,10 @@ namespace ConsoleApp_Lab1_release.Models
         /// </summary>
         public List<(DateTime Timestamp, string EventName)> EventHistory { get; } = new();
 
+        /// <summary>
+        /// Делегат выполнения процесса
+        /// </summary>
         public Action<ResourceManager> ExecuteLogic { get; }
-        public CancellationTokenSource Cts { get; } = new();
 
 
         /// <summary>
@@ -80,27 +82,9 @@ namespace ConsoleApp_Lab1_release.Models
             ExecuteLogic = execute;
         }
 
-        public async Task ExecuteAsync(ResourceManager manager)
-        {
-            var sw = Stopwatch.StartNew();
-            await Task.Run(() =>
-            {
-                try
-                {
-                    ExecuteLogic?.Invoke(manager);
-                }
-                finally
-                {
-                    Cts.Dispose();
-                }
-
-                while (sw.ElapsedMilliseconds < CpuBurst)
-                {
-                    if (Cts.Token.IsCancellationRequested) break;
-                }
-            }, Cts.Token);
-        }
-
+        /// <summary>
+        /// Получение статуса
+        /// </summary>
         public TaskState State
         {
             get
@@ -112,6 +96,9 @@ namespace ConsoleApp_Lab1_release.Models
             }
         }
 
+        /// <summary>
+        /// Получение захваченных ресурсов
+        /// </summary>
         public IReadOnlyList<int> AcquiredResources
         {
             get
@@ -123,6 +110,10 @@ namespace ConsoleApp_Lab1_release.Models
             }
         }
 
+        /// <summary>
+        /// Установка статуса
+        /// </summary>
+        /// <param name="newState">Новый статус</param>
         public void SetState(TaskState newState)
         {
             lock (_stateLock)
@@ -131,6 +122,11 @@ namespace ConsoleApp_Lab1_release.Models
             }
         }
 
+        /// <summary>
+        /// Попытка добавить новый ресурс
+        /// </summary>
+        /// <param name="resourceId">Id ресурса</param>
+        /// <returns></returns>
         public bool TryAddAcquiredResource(int resourceId)
         {
             lock (_resourcesLock)
@@ -141,6 +137,11 @@ namespace ConsoleApp_Lab1_release.Models
             }
         }
 
+       /// <summary>
+       /// Попытка удалить ресурс
+       /// </summary>
+       /// <param name="resourceId">Id ресурса</param>
+       /// <returns></returns>
         public bool TryReleaseResource(int resourceId)
         {
             lock (_resourcesLock)
@@ -148,8 +149,6 @@ namespace ConsoleApp_Lab1_release.Models
                 return _acquiredResources.Remove(resourceId);
             }
         }
-
-
     }
 
     /// <summary>

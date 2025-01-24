@@ -31,7 +31,7 @@
         /// <summary>
         /// Объект для блокировки
         /// </summary>
-        public object LockObject = new object();
+        public object LockObject = new();
 
         /// <summary>
         /// Конструктор ресурса
@@ -47,6 +47,11 @@
             AvailableSlots = capacity;
         }
 
+        /// <summary>
+        /// Получение данных ресурса
+        /// </summary>
+        /// <typeparam name="T">Тип ресурса</typeparam>
+        /// <returns>Данные</returns>
         public virtual T GetData<T>() where T : class
         {
             lock (_dataLock)
@@ -55,6 +60,11 @@
             }
         }
 
+        /// <summary>
+        /// Обновление данных ресурса
+        /// </summary>
+        /// <typeparam name="T">Тип ресурса</typeparam>
+        /// <param name="updateAction">Делегат обновления данных</param>
         public virtual void UpdateData<T>(Action<T> updateAction) where T : class
         {
             lock (_dataLock)
@@ -66,9 +76,13 @@
             }
         }
 
+        /// <summary>
+        /// Попытка получить слот
+        /// </summary>
+        /// <returns></returns>
         public bool TryAcquireSlot()
         {
-            lock (LockObject)
+            lock (_dataLock)
             {
                 if (AvailableSlots <= 0) return false;
                 AvailableSlots--;
@@ -76,9 +90,12 @@
             }
         }
 
+        /// <summary>
+        /// Выпуск слота
+        /// </summary>
         public void ReleaseSlot()
         {
-            lock (LockObject)
+            lock (_dataLock)
             {
                 AvailableSlots = Math.Min(AvailableSlots + 1, Capacity);
             }

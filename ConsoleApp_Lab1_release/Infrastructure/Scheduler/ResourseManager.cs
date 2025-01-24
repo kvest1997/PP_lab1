@@ -7,7 +7,7 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
     /// <summary>
     /// Абстрактный класс для управления планировщика
     /// </summary>
-    internal abstract class ResourceManager
+    internal abstract partial class ResourceManager
     {
         /// <summary>
         /// Ресурсы
@@ -29,6 +29,9 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         /// </summary>
         public int QuantumTime { get; set; }
 
+        /// <summary>
+        /// Для синхронизации вывода информации в консоль
+        /// </summary>
         private static readonly object _consoleLock = new object();
 
         protected int MaxT { get; }
@@ -64,7 +67,7 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
 
             foreach (var process in processQueue)
             {
-                var task = Task.Run(() => ExecuteProcess(process, systemStates));
+                var task = Task.Run(() => ExecuteProcessAsync(process, systemStates));
                 tasks.Add(task);
             }
 
@@ -76,7 +79,7 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         /// <summary>
         /// Метод для выполнения отдельного процесса
         /// </summary>
-        private void ExecuteProcess(Process process, List<string> systemStates)
+        private async Task ExecuteProcessAsync(Process process, List<string> systemStates)
         {
             int quantum = 0;
             var retryCount = 0;
@@ -111,11 +114,13 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                     {
                         process.SetState(TaskState.Completed);
                         ReleaseResources(process);
+                        retryCount++;
                     }
                     else
                     {
                         ReleaseResources(process);
                         process.SetState(TaskState.Waiting);
+                        retryCount++;
                     }
                     retryCount = 0;
                 }
@@ -143,11 +148,6 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
             Resources.Add(resource);
             PetriNet.AddPlace($"Ресурс_{resource.Id}_Свободен", resource.Capacity);
             PetriNet.AddPlace($"Ресурс_{resource.Id}_Занят", 0);
-            // Создаем переходы для ресурса один раз
-            foreach (var process in Processes.Where(p => p.RequiredResources.Contains(resource.Id)))
-            {
-                CreateResourceTransitions(process, resource.Id);
-            }
         }
 
         /// <summary>
@@ -169,6 +169,11 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
             }
         }
 
+        /// <summary>
+        /// Создание входных\выхожных дуг
+        /// </summary>
+        /// <param name="process">Объект процесса</param>
+        /// <param name="resourceId">Id ресурса</param>
         private void CreateResourceTransitions(Process process, int resourceId)
         {
             string transitionName = $"Получить_ресурс_{resourceId}_с_помощью_Процесса_{process.Id}";
@@ -229,8 +234,12 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                         Console.WriteLine($"Переход сработал: {transitionName}"); // Вывод в консоль
                         res.TryAcquireSlot();
 
-                        process.TryAddAcquiredResource(res.Id);
+                        bool success = process.TryAddAcquiredResource(res.Id);
                         process.EventHistory.Add((Timestamp: DateTime.Now, transitionName));
+                        if (!success)
+                        {
+                            res.ReleaseSlot();
+                        }
                     });
                     process.SetState(TaskState.Executing);
                 }
@@ -272,9 +281,13 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                         PetriNet.Fire(transitionName);
                         Console.WriteLine($"Переход сработал: {transitionName}"); // Вывод в консоль
 
-                        process.TryReleaseResource(resourceId);
+                        bool success = process.TryReleaseResource(resourceId);
+
                         process.EventHistory.Add((Timestamp: DateTime.Now, EventName: $"{transitionName}"));
-                        resource.ReleaseSlot(); // Увеличиваем доступные слоты
+                        if (success)
+                        {
+                            resource.ReleaseSlot(); // Увеличиваем доступные слоты
+                        }
                     }
                 }
             }
@@ -364,12 +377,24 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
             }
         }
 
+        /// <summary>
+        /// Получение ресурсов
+        /// </summary>
+        /// <typeparam name="T">Тип ресурса</typeparam>
+        /// <param name="id">Id ресурса</param>
+        /// <returns>Объект ресурса</returns>
+        /// <exception cref="KeyNotFoundException">Исключение: если ресурс не найден</exception>
         public T GetResource<T>(int id) where T : Resource
         {
             var resource = Resources.FirstOrDefault(r => r.Id == id) as T;
-            return resource ?? throw new KeyNotFoundException($"Resource {id} of type {typeof(T).Name} not found");
+            return resource ?? throw new KeyNotFoundException($"Ресурс {id} типа {typeof(T).Name} не найден");
         }
 
+        /// <summary>
+        /// Нормализация события из истории
+        /// </summary>
+        /// <param name="eventName">Имя события</param>
+        /// <returns>Измененное название</returns>
         private string NormalizeEventName(string eventName)
         {
             return eventName
@@ -379,6 +404,11 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                 .Replace("_", "") + ")";
         }
 
+        /// <summary>
+        /// Получение Id ресурса
+        /// </summary>
+        /// <param name="eventName">Имя события</param>
+        /// <returns>Id ресурса</returns>
         private int? ParseResourceId(string eventName)
         {
             var parts = eventName.Split('_');
@@ -387,6 +417,11 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
             return null;
         }
 
+        /// <summary>
+        /// Динамический вывод информации
+        /// </summary>
+        /// <param name="quantum">Квант времени</param>
+        /// <param name="systemStates">Логи</param>
         public void PrintDynamicProcessInfo(int quantum, List<string> systemStates)
         {
             lock (_consoleLock) // Полная блокировка всех операций вывода
@@ -441,6 +476,12 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
             }
         }
 
+
+        /// <summary>
+        /// Получение имени статуса
+        /// </summary>
+        /// <param name="state">Стаус</param>
+        /// <returns>Название статуса</returns>
         private string GetStateName(TaskState state)
         {
             return state switch
@@ -451,32 +492,6 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                 TaskState.Completed => "Завершён",
                 _ => "Неизвестное состояние"
             };
-        }
-
-        // Вспомогательные классы для снимка системы
-        private class SystemSnapshot
-        {
-            public DateTime Timestamp { get; set; }
-            public int Quantum { get; set; }
-            public List<ResourceState> Resources { get; set; }
-            public List<ProcessState> Processes { get; set; }
-        }
-
-        private class ResourceState
-        {
-            public int Id { get; set; }
-            public string Name { get; set; }
-            public int Available { get; set; }
-            public int Total { get; set; }
-        }
-
-        private class ProcessState
-        {
-            public int Id { get; set; }
-            public string Name { get; set; }
-            public TaskState State { get; set; }
-            public List<int> AcquiredResources { get; set; }
-            public int RemainingTime { get; set; }
         }
     }
 }
