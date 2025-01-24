@@ -6,6 +6,9 @@ using System.Collections.Generic;
 
 namespace ConsoleApp_Lab1_release.Controllers
 {
+    /// <summary>
+    /// Класс для реализации проверки операторов
+    /// </summary>
     public class ParallelProcessManager
     {
         private readonly ResourceManager _resourceManager;
@@ -30,7 +33,10 @@ namespace ConsoleApp_Lab1_release.Controllers
             _operand2 = op2;
         }
 
-        public void InitializeResourcesAndProcesses()
+        /// <summary>
+        /// Инициализация данных
+        /// </summary>
+        private void InitializeResourcesAndProcesses()
         {
             // Добавляем ресурсы
             var dataResource = new Resource(1, "DataResource", 1);
@@ -92,12 +98,19 @@ namespace ConsoleApp_Lab1_release.Controllers
             _resourceManager.AddProcess(process3);
         }
 
+        /// <summary>
+        /// Запуск процесса
+        /// </summary>
         public void Run()
         {
+            InitializeResourcesAndProcesses();
             _resourceManager.Execute(_systemLog);
             PrintResults();
         }
 
+        /// <summary>
+        /// Вывод результатов
+        /// </summary>
         private void PrintResults()
         {
             Console.WriteLine("\n=== Результат проверки ===");
@@ -108,6 +121,9 @@ namespace ConsoleApp_Lab1_release.Controllers
         }
     }
 
+    /// <summary>
+    /// Перечисление видов планировщиков управления
+    /// </summary>
     public enum SchedulerType
     {
         RoundRobin,
