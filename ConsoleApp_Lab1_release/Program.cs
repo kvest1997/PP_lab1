@@ -40,8 +40,15 @@ namespace ConsoleApp_Lab1_release
             //// Запись выходных данных
             //OutputWriter.WriteOutput("output.txt", resources, processes, systemStates.Count * qt, systemStates);
 
+            Console.WriteLine("Введите первый операнд: ");
+            int op1 = Convert.ToInt32(Console.ReadLine());
+
+            Console.WriteLine("Введите второй операнд: ");
+            int op2 = Convert.ToInt32(Console.ReadLine());
+
+
             var manager = new ParallelProcessManager(SchedulerType.RoundRobin);
-            manager.SetOperands(1, 3); // Устанавливаем операнды
+            manager.SetOperands(op1, op2); // Устанавливаем операнды
             manager.Run();
         }
     }
