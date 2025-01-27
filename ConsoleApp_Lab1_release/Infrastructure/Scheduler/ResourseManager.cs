@@ -84,16 +84,17 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
             int quantum = 0;
             var retryCount = 0;
             const int maxRetries = 3;
-
+            
             while (process.State != TaskState.Completed & retryCount < maxRetries)
             {
                 lock (_consoleLock)
                 {
+                    Console.WriteLine($"Вызвано из - {process.Name}");
                     PrintDynamicProcessInfo(quantum, systemStates);
                 }
 
                 // Пытаемся захватить ресурсы
-                AcquireResources(process);
+                List<Resource> resources = AcquireResources(process);
 
                 lock (_consoleLock)
                 {
@@ -105,23 +106,21 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                     // Выполняем процесс
                     int timeToExecute = Math.Min(process.RemainingTime, QuantumTime);
 
-                    process.ExecuteLogic?.Invoke(this);
-
-                    process.RemainingTime -= timeToExecute;
-
-                    // Если процесс завершил выполнение, освобождаем ресурсы
-                    if (process.RemainingTime <= 0)
-                    {
-                        process.SetState(TaskState.Completed);
-                        ReleaseResources(process);
-                        retryCount++;
-                    }
-                    else
+                    var res = process.ExecuteLogic?.Invoke(resources);
+                    if (res == false)
                     {
                         ReleaseResources(process);
                         process.SetState(TaskState.Waiting);
                         retryCount++;
                     }
+                    else
+                    {
+                        process.RemainingTime = 0;
+                        process.SetState(TaskState.Completed);
+                        ReleaseResources(process);
+                        retryCount++;
+                    }
+
                     retryCount = 0;
                 }
                 else
@@ -160,8 +159,8 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         public void AddResource(Resource resource)
         {
             Resources.Add(resource);
-            PetriNet.AddPlace($"Ресурс_{resource.Id}_Свободен", resource.Capacity);
-            PetriNet.AddPlace($"Ресурс_{resource.Id}_Занят", 0);
+            PetriNet.AddPlace($"Ресурс_{resource.Id}_{resource.Name}_Свободен", resource.Capacity);
+            PetriNet.AddPlace($"Ресурс_{resource.Id}_{resource.Name}_Занят", 0);
         }
 
         /// <summary>
@@ -170,16 +169,15 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         /// <param name="process">Объект задачи</param>
         public virtual void AddProcess(Process process)
         {
-            PetriNet.AddPlace($"Процесс_{process.Id}_Ожидает", process.RequiredResources.Count);
-            PetriNet.AddPlace($"Процесс_{process.Id}_Запущен", 0);
+            PetriNet.AddPlace($"Процесс_{process.Id}_{process.Name}_Ожидает", process.RequiredResources.Count);
+            PetriNet.AddPlace($"Процесс_{process.Id}_{process.Name}_Запущен", 0);
 
             // Создаем переходы для всех требуемых ресурсов
             foreach (var resourceId in process.RequiredResources)
             {
                 var resource = Resources.FirstOrDefault(r => r.Id == resourceId);
-                if (resource == null) throw new InvalidOperationException($"Resource {resourceId} not found");
-
-                CreateResourceTransitions(process, resourceId);
+                if (resource == null) throw new InvalidOperationException($"Resource {resource.Id} {resource.Name} not found");
+                CreateResourceTransitions(process, resource);
             }
         }
 
@@ -188,23 +186,23 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         /// </summary>
         /// <param name="process">Объект процесса</param>
         /// <param name="resourceId">Id ресурса</param>
-        private void CreateResourceTransitions(Process process, int resourceId)
+        private void CreateResourceTransitions(Process process, Resource resource)
         {
-            string transitionName = $"Получить_ресурс_{resourceId}_с_помощью_Процесса_{process.Id}";
-            PetriNet.AddTransition(transitionName, () => PetriNet.GetTokens($"Ресурс_{resourceId}_Свободен") > 0);
+            string transitionName = $"Получить_ресурс_{resource.Id}_{resource.Name}_с_помощью_Процесса_{process.Id}_{process.Name}";
+            PetriNet.AddTransition(transitionName, () => PetriNet.GetTokens($"Ресурс_{resource.Id}_{resource.Name}_Свободен") > 0);
+            
+            PetriNet.AddInputArc(transitionName, $"Ресурс_{resource.Id}_{resource.Name}_Свободен");
+            PetriNet.AddInputArc(transitionName, $"Процесс_{process.Id}_{process.Name}_Ожидает");
+            PetriNet.AddOutputArc(transitionName, $"Ресурс_{resource.Id}_{resource.Name}_Занят");
+            PetriNet.AddOutputArc(transitionName, $"Процесс_{process.Id}_{process.Name}_Запущен");
 
-            PetriNet.AddInputArc(transitionName, $"Ресурс_{resourceId}_Свободен");
-            PetriNet.AddInputArc(transitionName, $"Процесс_{process.Id}_Ожидает");
-            PetriNet.AddOutputArc(transitionName, $"Ресурс_{resourceId}_Занят");
-            PetriNet.AddOutputArc(transitionName, $"Процесс_{process.Id}_Запущен");
+            transitionName = $"Освободить_ресурс_{resource.Id}_{resource.Name}_с_помощью_Процесса_{process.Id}_{process.Name}";
+            PetriNet.AddTransition(transitionName, () => PetriNet.GetTokens($"Ресурс_{resource.Id}_{resource.Name}_Занят") > 0);
 
-            transitionName = $"Освободить_ресурс_{resourceId}_с_помощью_Процесса_{process.Id}";
-            PetriNet.AddTransition(transitionName, () => PetriNet.GetTokens($"Ресурс_{resourceId}_Занят") > 0);
-
-            PetriNet.AddInputArc(transitionName, $"Ресурс_{resourceId}_Занят");
-            PetriNet.AddInputArc(transitionName, $"Процесс_{process.Id}_Запущен");
-            PetriNet.AddOutputArc(transitionName, $"Ресурс_{resourceId}_Свободен");
-            PetriNet.AddOutputArc(transitionName, $"Процесс_{process.Id}_Ожидает");
+            PetriNet.AddInputArc(transitionName, $"Ресурс_{resource.Id}_{resource.Name}_Занят");
+            PetriNet.AddInputArc(transitionName, $"Процесс_{process.Id}_{process.Name}_Запущен");
+            PetriNet.AddOutputArc(transitionName, $"Ресурс_{resource.Id}_{resource.Name}_Свободен");
+            PetriNet.AddOutputArc(transitionName, $"Процесс_{process.Id}_{process.Name}_Ожидает");
         }
         #endregion
 
@@ -249,18 +247,30 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                 // 3. Освобождаем ресурсы
                 foreach (var resource in resources)
                 {
-                    string transitionName = $"Освободить_ресурс_{resource.Id}_с_помощью_Процесса_{process.Id}";
+                    string transitionName = $"Освободить_ресурс_{resource.Id}_{resource.Name}_с_помощью_Процесса_{process.Id}_{process.Name}";
 
                     if (!PetriNet.CanFire(transitionName))
                         throw new InvalidOperationException($"Переход {transitionName} не сработал");
 
                     PetriNet.Fire(transitionName);
                     Console.WriteLine($"Переход сработал: {transitionName}"); // Вывод в консоль
+                    var currentTransiton = PetriNet.Transitions.First(x => x.Name == transitionName);
+
+                    
+                    foreach (var item in currentTransiton.InputPlaces)
+                    {
+                        Console.WriteLine($"{item.Name} - {item.Tokens} {currentTransiton.Name}");
+                    }
+
+                    foreach (var item in currentTransiton.OutputPlaces)
+                    {
+                        Console.WriteLine($"{item.Name} - {item.Tokens}");
+                    }
                     process.EventHistory.Add((Timestamp: DateTime.Now, EventName: $"{transitionName}"));
 
                     if (!TryReleaseResource(resource, process))
                     {
-                        throw new InvalidOperationException($"Не удалось освободить ресурс {resource.Id} для процесса {process.Id}");
+                        throw new InvalidOperationException($"Не удалось освободить ресурс {resource.Id} для процесса {process.Id} {currentTransiton.Name}");
                     }
                 }
 
@@ -283,11 +293,11 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         /// </summary>
         /// <param name="process">Задача</param>
         /// <exception cref="InvalidOperationException">Исключение когда не найден ресурс</exception>
-        private void AcquireResources(Process process)
+        private List<Resource> AcquireResources(Process process)
         {
             // Проверяем, завершен ли процесс
             if (process.State == TaskState.Completed)
-                return;
+                return null;
 
             var requiredResources = process.RequiredResources
                 .OrderBy(id => id)
@@ -305,27 +315,41 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
             try
             {
                 bool canAcquire = requiredResources.All(res =>
-                    PetriNet.CanFire($"Получить_ресурс_{res.Id}_с_помощью_Процесса_{process.Id}"));
+                    PetriNet.CanFire($"Получить_ресурс_{res.Id}_{res.Name}_с_помощью_Процесса_{process.Id}_{process.Name}"));
 
                 process.SetState(canAcquire ? TaskState.Executing : TaskState.Waiting);
 
-                if (!canAcquire) return;
+                if (!canAcquire) return null;
 
                 foreach (var resource in requiredResources)
                 {
-                    string transitionName = $"Получить_ресурс_{resource.Id}_с_помощью_Процесса_{process.Id}";
-
-                    PetriNet.Fire(transitionName);
-                    Console.WriteLine($"Переход сработал: {transitionName}");
-
-                    if (!TryAcquireResource(resource, process))
+                    lock (resource.LockObject)
                     {
-                        process.SetState(TaskState.Waiting);
+                        string transitionName = $"Получить_ресурс_{resource.Id}_{resource.Name}_с_помощью_Процесса_{process.Id}_{process.Name}";
+
+                        PetriNet.Fire(transitionName);
+                        Console.WriteLine($"Переход сработал: {transitionName}");
+
+                        var currentTransiton = PetriNet.Transitions.First(x => x.Name == transitionName);
+
+                        foreach (var item in currentTransiton.InputPlaces)
+                        {
+                            Console.WriteLine($"{item.Name} - {item.Tokens}");
+                        }
+
+                        foreach (var item in currentTransiton.OutputPlaces)
+                        {
+                            Console.WriteLine($"{item.Name} - {item.Tokens}");
+                        }
+
+                        if (!TryAcquireResource(resource, process))
+                        {
+                            process.SetState(TaskState.Waiting);
+                        }
+
+                        process.EventHistory.Add((DateTime.Now, transitionName));
                     }
-
-                    process.EventHistory.Add((DateTime.Now, transitionName));
                 }
-
             }
             finally
             {
@@ -336,6 +360,8 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                     .ToList()
                     .ForEach(r => Monitor.Exit(r.LockObject));
             }
+
+            return requiredResources;
         }
 
         /// <summary>
@@ -447,7 +473,7 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
         /// </summary>
         /// <param name="quantum">Квант времени</param>
         /// <param name="systemStates">Логи</param>
-        public void PrintDynamicProcessInfo(int quantum, List<string> systemStates)
+        private void PrintDynamicProcessInfo(int quantum, List<string> systemStates)
         {
             lock (_consoleLock) // Полная блокировка всех операций вывода
             {

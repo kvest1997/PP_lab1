@@ -19,7 +19,7 @@
     /// </summary>
     public class Operands
     {
-        public int Op1 { get; set; }
-        public int Op2 { get; set; }
+        public bool[] Op1Bits { get; set; } = new bool[2]; // Бит 0 и бит 1
+        public bool[] Op2Bits { get; set; } = new bool[2];
     }
 }

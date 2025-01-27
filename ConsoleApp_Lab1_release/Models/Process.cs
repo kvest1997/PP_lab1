@@ -56,7 +56,7 @@ namespace ConsoleApp_Lab1_release.Models
         /// <summary>
         /// Делегат выполнения процесса
         /// </summary>
-        public Action<ResourceManager> ExecuteLogic { get; }
+        public Func<List<Resource>, bool> ExecuteLogic { get; }
 
 
         /// <summary>
@@ -69,7 +69,7 @@ namespace ConsoleApp_Lab1_release.Models
         /// <param name="requiredResources">Список требуемых ресурсов</param>
         public Process(int id, string name, 
             int priority, int cpuBurst, 
-            int count, List<int> requiredResources, Action<ResourceManager> execute)
+            int count, List<int> requiredResources, Func<List<Resource>, bool> execute)
         {
             Id = id;
             Name = name;
