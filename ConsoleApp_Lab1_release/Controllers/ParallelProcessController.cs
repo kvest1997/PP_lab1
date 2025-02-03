@@ -7,13 +7,13 @@ namespace ConsoleApp_Lab1_release.Controllers
     /// <summary>
     /// Класс для реализации проверки операторов
     /// </summary>
-    public class ParallelProcessManager
+    public class ParallelProcessController
     {
         private readonly ResourceManager _resourceManager;
         private readonly List<string> _systemLog = new List<string>();
         private Operands _currentOperands = new Operands();
 
-        public ParallelProcessManager(SchedulerType schedulerType, int quantumTime = 100)
+        public ParallelProcessController(SchedulerType schedulerType, int quantumTime = 100)
         {
             _resourceManager = schedulerType switch
             {
@@ -70,6 +70,7 @@ namespace ConsoleApp_Lab1_release.Controllers
                 var compareResult = (ResultResource)resources[2];
 
                 bool result = Convert.ToInt32(op1Bit0.Data) == Convert.ToInt32(op2Bit0.Data);
+
                 compareResult.AddResult(1, result);
                 return true;
             });
@@ -90,6 +91,7 @@ namespace ConsoleApp_Lab1_release.Controllers
 
                 bool result = Convert.ToInt32(op1Bit1.Data) == Convert.ToInt32(op2Bit1.Data);
                 compareResult.AddResult(2, result);
+
                 return true;
             });
 
@@ -103,6 +105,7 @@ namespace ConsoleApp_Lab1_release.Controllers
                 requiredResources: new List<int> { 5 },
                 execute: resources =>
                 {
+                    
                     var resultResource = (ResultResource)resources[0];
                     var results = resultResource.GetResults();
 

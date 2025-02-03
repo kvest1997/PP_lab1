@@ -1,6 +1,7 @@
 ﻿using ConsoleApp_Lab1_release.Infrastructure.PetriNet;
 using ConsoleApp_Lab1_release.Models;
 using System.Text;
+using static System.TimeZoneInfo;
 
 namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
 {
@@ -63,28 +64,39 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
             var processQueue = GetProcessQueue();
 
             // Запускаем задачи параллельно
-            var tasks = new List<Task>();
+            var tasks = new List<Task<bool>>();
 
             foreach (var process in processQueue)
             {
-                var task = Task.Run(() => ExecuteProcess(process, systemStates));
+                Task<bool> task = Task.Run(() => 
+                { 
+                    return ExecuteProcess(process, systemStates);
+                });
                 tasks.Add(task);
             }
 
             // Ожидаем завершения всех задач
             Task.WaitAll(tasks.ToArray());
+            if (tasks.Any(a => a.Result == false))
+                Execute(systemStates);
+
             PrintFinalProcessReport(systemStates);
         }
 
         /// <summary>
         /// Метод для выполнения отдельного процесса
         /// </summary>
-        private void ExecuteProcess(Process process, List<string> systemStates)
+        private async Task<bool> ExecuteProcess(Process process, List<string> systemStates)
         {
             int quantum = 0;
             var retryCount = 0;
             const int maxRetries = 3;
-            
+
+            bool isExecute = true;
+
+            if(process.State == TaskState.NotInitialized)
+                process.EventHistory.Add((DateTime.Now, $"Процесс {process.Name} запустился"));
+
             while (process.State != TaskState.Completed & retryCount < maxRetries)
             {
                 lock (_consoleLock)
@@ -92,7 +104,6 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                     Console.WriteLine($"Вызвано из - {process.Name}");
                     PrintDynamicProcessInfo(quantum, systemStates);
                 }
-
                 // Пытаемся захватить ресурсы
                 List<Resource> resources = AcquireResources(process);
 
@@ -107,27 +118,34 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                     int timeToExecute = Math.Min(process.RemainingTime, QuantumTime);
 
                     var res = process.ExecuteLogic?.Invoke(resources);
+                    process.EventHistory.Add((DateTime.Now, $"Выполнение: ({process.Name}"));
+                    await Task.Delay(1000);
+
                     if (res == false)
                     {
+                        process.EventHistory.Add((DateTime.Now, $"Процесс {process.Name} (Не удачное выполнение"));
                         ReleaseResources(process);
                         process.SetState(TaskState.Waiting);
                         retryCount++;
+                        isExecute = false;
                     }
                     else
                     {
+                        process.EventHistory.Add((DateTime.Now, $"Процесс: ({process.Name} выполнился"));
                         process.RemainingTime = 0;
                         process.SetState(TaskState.Completed);
                         ReleaseResources(process);
+                        isExecute = true;
                         retryCount++;
                     }
-
-                    retryCount = 0;
                 }
                 else
                 {
-                    var delay = Math.Min(100 * (int)Math.Pow(2, retryCount), 1000);
-                    Thread.Sleep(delay);
+                    process.EventHistory.Add((DateTime.Now, $"Процесс: ({process.Name} ожидает"));
+                    var delay = Math.Min(400 * (int)Math.Pow(2, retryCount), 2000);
+                    await Task.Delay(delay);
                     retryCount++;
+                    isExecute = false;
                 }
 
                 quantum++;
@@ -136,6 +154,11 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
                     PrintDynamicProcessInfo(quantum, systemStates);
                 }
             }
+
+            if(isExecute) process.EventHistory.Add((DateTime.Now, $"Процесс: ({process.Name} завершился"));
+
+
+            return isExecute;
         }
 
         /// <summary>
@@ -319,7 +342,12 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
 
                 process.SetState(canAcquire ? TaskState.Executing : TaskState.Waiting);
 
-                if (!canAcquire) return null;
+                if (!canAcquire)
+                {
+                    process.EventHistory.Add((DateTime.Now, $"{process.Name} - не смог получить ресурсы"));
+
+                    return null;
+                }
 
                 foreach (var resource in requiredResources)
                 {
@@ -457,7 +485,7 @@ namespace ConsoleApp_Lab1_release.Infrastructure.Scheduler
 
                     processReport.AppendLine("\nПараллельные процессы:");
                     processReport.AppendLine(parallelProcesses.Any()
-                        ? string.Join(" || ", parallelProcesses.Prepend(process.Name))
+                        ? $"P <{string.Join(" || ", parallelProcesses.Prepend(process.Name))}>"
                         : "Нет параллельных взаимодействий");
 
                     // Атомарный вывод

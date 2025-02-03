@@ -45,11 +45,25 @@ namespace ConsoleApp_Lab1_release
 
             Console.WriteLine("Введите второй операнд: ");
             int op2 = Convert.ToInt32(Console.ReadLine());
-
-
-            var manager = new ParallelProcessManager(SchedulerType.RoundRobin);
+            var manager = new ParallelProcessController(SchedulerType.RoundRobin);
             manager.SetOperands(op1, op2); // Устанавливаем операнды
             manager.Run();
+            Console.ReadKey();
+            Console.Clear();
+
+            var comparator1 = new CheckOperandPetriNet(0b11, 0b00);
+            Console.WriteLine(comparator1.GetComparisonResult()); // 0
+
+            Console.ReadKey();
+
+            var comparator2 = new CheckOperandPetriNet(0b11, 0b11);
+            Console.WriteLine(comparator2.GetComparisonResult()); // 1
+
+            Console.ReadKey();
+            var comparator3 = new CheckOperandPetriNet(0b10, 0b11);
+            Console.WriteLine(comparator3.GetComparisonResult()); // 0
+
+
         }
     }
 }
